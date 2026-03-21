@@ -13,13 +13,29 @@ def cleanup(fid, delay=300):
         FILES.pop(fid, None)
     threading.Thread(target=_clean, daemon=True).start()
 
+@app.route("/duration")
+def get_duration():
+    url = request.args.get("url")
+    if not url:
+        return jsonify({"error": "no url"}), 400
+    result = subprocess.run([
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        url
+    ], capture_output=True, text=True)
+    try:
+        return jsonify({"duration": float(result.stdout.strip())})
+    except:
+        return jsonify({"error": "could not read duration", "raw": result.stdout, "stderr": result.stderr}), 500
+
 @app.route("/gifsplit")
 def gifsplit():
-    url     = request.args.get("url")
-    scale   = request.args.get("maxscale", 64, type=int)
-    start   = request.args.get("start", 0, type=int)
-    duration= request.args.get("duration", 0, type=int)
-    fps     = request.args.get("fps", 8, type=int)
+    url      = request.args.get("url")
+    scale    = request.args.get("maxscale", 64, type=int)
+    start    = request.args.get("start", 0, type=int)
+    duration = request.args.get("duration", 0, type=int)
+    fps      = request.args.get("fps", 8, type=int)
 
     if not url:
         return jsonify({"error": "no url"}), 400
@@ -30,25 +46,21 @@ def gifsplit():
     wav = f"/tmp/{fid}.wav"
 
     # download
-    dl_cmd = ["yt-dlp", "-o", mp4, "--no-playlist"]
-    if url.endswith(".mp4") or "catbox" in url:
-        dl_cmd = ["wget", "-O", mp4, url]
-    result = subprocess.run(dl_cmd + ([url] if "yt-dlp" in dl_cmd[0] else []), capture_output=True)
-    if result.returncode != 0:
-        return jsonify({"error": "download failed: " + result.stderr.decode()}), 500
+    if "catbox" in url or url.endswith(".mp4"):
+        dl = subprocess.run(["wget", "-O", mp4, url], capture_output=True)
+    else:
+        dl = subprocess.run(["yt-dlp", "-o", mp4, "--no-playlist", url], capture_output=True)
+    if dl.returncode != 0:
+        return jsonify({"error": "download failed", "stderr": dl.stderr.decode()}), 500
 
-    # trim + convert to gif
+    # gif
     ff_args = ["ffmpeg", "-y"]
     if start: ff_args += ["-ss", str(start)]
     if duration: ff_args += ["-t", str(duration)]
-    ff_args += [
-        "-i", mp4,
-        "-vf", f"scale={scale}:-1:flags=lanczos,fps={fps}",
-        gif
-    ]
+    ff_args += ["-i", mp4, "-vf", f"scale={scale}:-1:flags=lanczos,fps={fps}", gif]
     subprocess.run(ff_args, capture_output=True)
 
-    # extract wav
+    # wav
     wa_args = ["ffmpeg", "-y"]
     if start: wa_args += ["-ss", str(start)]
     if duration: wa_args += ["-t", str(duration)]
